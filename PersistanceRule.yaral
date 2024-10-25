@@ -1,0 +1,83 @@
+rule persistence_detection {
+    meta: 
+        author = "Giovanni Castillo"
+        severity = "CRITICAL"
+        description = "Detects various persistence techniques in Domain Controller security event logs"
+        mitre_techniques = "T1136, T1546, T1098, T1547, T1053, T1078, T1574"
+        version = "1.1"
+    events:
+
+        /* 
+        logs needed to be ingested for detections include : 
+        Windows Security Event Logs
+        Windows System Event Logs
+        Windows Application Event Logs
+        Registry Auditing Logs
+        ---------------------------------------
+        Methods for ingestion : 
+        Winlogbeat / NXLog  ideal if possible
+
+        
+        */
+
+        /* T1136.001 & .002 MITRE ATT&CK vector "CREATE ACCOUNT" --
+        Detects account creation, for local and domain accounts */
+        $e1 = udm_event(
+            ($event.user_account_type = "LOCAL_ACCOUNT_TYPE" OR
+             $event.user_account_type = "DOMAIN_ACCOUNT_TYPE") AND
+             $event.event_type = "WINDOWS_EVENT_4720"
+        )
+        
+        /* T1546.013 MITRE ATT&CK vector "EDIT PS PROFILE" --
+        Detects PowerShell execution without the -NoProfile flag */
+        $e2 = udm_event(
+            $event.event_type = "PROCESS_CREATION" AND
+            $process.command_line contains "powershell" AND
+            not $process.command_line contains "-NoProfile"
+        )
+        
+        /* T1098.002 MITRE ATT&CK vector "ACCOUNT MANIPULATION" --
+        Detects changes to account settings or privileges */
+        $e3 = udm_event(
+            $event.event_type in ("WINDOWS_EVENT_4722", "WINDOWS_EVENT_4732")
+        )
+
+        /* T1547 MITRE ATT&CK vector "BOOT OR LOGON AUTOSTART EXECUTION" --
+        Detects registry key modifications for Run/RunOnce, or autostart programs */
+        // open DC regedit to confirm path
+        $e4 = udm_event(
+            $event.event_type = "REGISTRY_MODIFICATION" AND
+            $registry.key_path matches /.*\\Software\\Microsoft\\Windows\\CurrentVersion\\Run.*/i
+        )
+
+        /* T1053.002 & .005 MITRE ATT&CK vector "SCHEDULED TASK/CRON JOB" --
+        Detects scheduled task creation or modification */
+        $e5 = udm_event(
+            $event.event_type in ("SCHEDULED_TASK_CREATION", "SCHEDULED_TASK_MODIFICATION")
+        )
+
+        /* T1574 MITRE ATT&CK vector "HIJACK EXECUTION FLOW" --
+        Detects suspicious DLL or service modifications */
+        $e6 = udm_event(
+            $event.event_type = "FILE_MODIFICATION" AND
+            ($target.file_path matches /.*\\System32\\.*\\.dll$/i OR
+             $target.file_path matches /.*\\Services.*/i)
+        )
+
+        /* T1078.002 & .003 MITRE ATT&CK vector "VALID ACCOUNTS" --
+        Detects unusual usage of valid domain or local accounts */
+        $e7 = udm_event(
+            $event.event_type = "USER_LOGIN" AND
+            ($principal.user_account_type = "DOMAIN_ACCOUNT_TYPE" OR
+             $principal.user_account_type = "LOCAL_ACCOUNT_TYPE")
+        )
+
+        /* T1546.003 MITRE ATT&CK vector "WMI EVENT SUBSCRIPTION" --
+        Detects suspicious WMI event subscription changes */
+        $e8 = udm_event(
+            $event.event_type = "WMI_EVENT_SUBSCRIPTION"
+        )
+
+    condition:
+        $e1 or $e2 or $e3 or $e4 or $e5 or $e6 or $e7 or $e8
+}
